@@ -692,14 +692,14 @@ main { flex:1; display:grid; grid-template-columns:320px 1fr; gap:0; }
   <div class="settings-modal">
     <div class="settings-title">⚙️ API Key 设置</div>
     <div class="settings-sub">
-      输入你的 Anthropic API Key 以启用 AI 投资建议和智能问答功能。<br>
+      输入你的 Google Gemini API Key 以启用 AI 投资建议和智能问答功能。<br>
       Key 仅保存在本地浏览器，不会上传至任何服务器。
     </div>
     <input class="settings-input" id="apiKeyInput" type="password"
-      placeholder="sk-ant-api03-..." autocomplete="off" spellcheck="false">
+      placeholder="AIza..." autocomplete="off" spellcheck="false">
     <div class="settings-hint">
-      还没有 API Key？前往 <a href="https://console.anthropic.com/keys" target="_blank">console.anthropic.com/keys</a> 免费创建。<br>
-      每次 AI 分析约消耗 $0.003 美元（claude-sonnet）。
+      还没有 API Key？前往 <a href="https://aistudio.google.com/app/apikey" target="_blank">aistudio.google.com/app/apikey</a> 免费获取。<br>
+      Gemini 2.0 Flash 免费额度充足，个人使用完全够用。
     </div>
     <div class="settings-btns">
       <button class="ai-action-btn btn-secondary" onclick="closeSettings()">取消</button>
@@ -727,9 +727,27 @@ main { flex:1; display:grid; grid-template-columns:320px 1fr; gap:0; }
 // ===========================
 // DATA & STATE
 // ===========================
-const CLAUDE_API = "https://api.anthropic.com/v1/messages";
+const GEMINI_API = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
 function getApiKey() { return localStorage.getItem('alpha_apikey') || ''; }
 function hasApiKey() { return !!getApiKey(); }
+
+async function callAI(prompt, systemPrompt='') {
+  const key = getApiKey();
+  const contents = [];
+  if(systemPrompt) {
+    contents.push({role:'user', parts:[{text: systemPrompt}]});
+    contents.push({role:'model', parts:[{text:'好的，我明白了。'}]});
+  }
+  contents.push({role:'user', parts:[{text: prompt}]});
+  const res = await fetch(GEMINI_API + '?key=' + key, {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({contents, generationConfig:{maxOutputTokens:1200}})
+  });
+  const data = await res.json();
+  if(data.error) throw new Error('API错误 (' + data.error.code + '): ' + data.error.message);
+  return data.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join('') || '分析失败，请重试';
+}
 
 // Default watchlist
 let watchlist = JSON.parse(localStorage.getItem('alpha_watchlist') || 'null') || [
@@ -888,7 +906,7 @@ function closeSettings() {
 }
 function saveApiKey() {
   const key = document.getElementById('apiKeyInput').value.trim();
-  if(!key || !key.startsWith('sk-ant-')) {
+  if(!key || !key.startsWith('AIza')) {
     document.getElementById('apiKeyInput').style.borderColor = 'var(--red)';
     setTimeout(()=>document.getElementById('apiKeyInput').style.borderColor='',1500);
     return;
@@ -1243,24 +1261,10 @@ ${d.news?.map(n=>n.headline).join('\n') || '无'}
 请用简洁专业的中文回答，重点突出，避免废话。`;
 
   try {
-    const res = await fetch(CLAUDE_API, {
-      method:'POST',
-      headers:{'Content-Type':'application/json','x-api-key':getApiKey(),'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-      body:JSON.stringify({
-        model:'claude-sonnet-4-20250514',
-        max_tokens:1000,
-        messages:[{role:'user',content:prompt}]
-      })
-    });
-    const data = await res.json();
-    if(data.error) {
-      contentEl.innerHTML = `<div style="color:var(--red)">API错误 (${res.status}): ${data.error.message || JSON.stringify(data.error)}</div>`;
-    } else {
-      const text = data.content?.map(c=>c.text||'').join('') || '分析失败，请重试';
-      contentEl.innerHTML = formatAIResponse(text);
-    }
+    const text = await callAI(prompt);
+    contentEl.innerHTML = formatAIResponse(text);
   } catch(e) {
-    contentEl.innerHTML = `<div style="color:var(--red)">连接失败: ${e.message}</div>`;
+    contentEl.innerHTML = `<div style="color:var(--red)">${e.message}</div>`;
   }
 
   btn.disabled = false;
@@ -1296,23 +1300,8 @@ async function sendChat() {
   const thinkingEl = document.querySelector('.chat-messages .msg.ai:last-child .msg-bubble');
 
   try {
-    const res = await fetch(CLAUDE_API, {
-      method:'POST',
-      headers:{'Content-Type':'application/json','x-api-key':getApiKey(),'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-      body:JSON.stringify({
-        model:'claude-sonnet-4-20250514',
-        max_tokens:800,
-        system:`你是Alpha AI投资顾问，专注于美股投资分析。${context}请用专业简洁的中文回答用户问题，避免过长回复。`,
-        messages:[{role:'user',content:msg}]
-      })
-    });
-    const data = await res.json();
-    if(data.error) {
-      thinkingEl.innerHTML = `<span style="color:var(--red)">API错误 (${res.status}): ${data.error.message||JSON.stringify(data.error)}</span>`;
-    } else {
-      const reply = data.content?.map(c=>c.text||'').join('') || '分析失败，请重试';
-      thinkingEl.innerHTML = formatAIResponse(reply);
-    }
+    const reply = await callAI(msg, `你是Alpha AI投资顾问，专注于美股投资分析。${context}请用专业简洁的中文回答用户问题，避免过长回复。`);
+    thinkingEl.innerHTML = formatAIResponse(reply);
   } catch(e) {
     thinkingEl.innerHTML = '<span style="color:var(--red)">连接失败，请稍后重试</span>';
   }
