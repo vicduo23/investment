@@ -727,7 +727,7 @@ main { flex:1; display:grid; grid-template-columns:320px 1fr; gap:0; }
 // ===========================
 // DATA & STATE
 // ===========================
-const GEMINI_API = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent";
+const GEMINI_API = "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash-latest:generateContent";
 function getApiKey() { return localStorage.getItem('alpha_apikey') || ''; }
 function hasApiKey() { return !!getApiKey(); }
 
