@@ -1253,10 +1253,14 @@ ${d.news?.map(n=>n.headline).join('\n') || '无'}
       })
     });
     const data = await res.json();
-    const text = data.content?.map(c=>c.text||'').join('') || '分析失败，请重试';
-    contentEl.innerHTML = formatAIResponse(text);
+    if(data.error) {
+      contentEl.innerHTML = `<div style="color:var(--red)">API错误 (${res.status}): ${data.error.message || JSON.stringify(data.error)}</div>`;
+    } else {
+      const text = data.content?.map(c=>c.text||'').join('') || '分析失败，请重试';
+      contentEl.innerHTML = formatAIResponse(text);
+    }
   } catch(e) {
-    contentEl.innerHTML = '<div style="color:var(--red)">连接失败，请稍后重试</div>';
+    contentEl.innerHTML = `<div style="color:var(--red)">连接失败: ${e.message}</div>`;
   }
 
   btn.disabled = false;
@@ -1303,8 +1307,12 @@ async function sendChat() {
       })
     });
     const data = await res.json();
-    const reply = data.content?.map(c=>c.text||'').join('') || '分析失败，请重试';
-    thinkingEl.innerHTML = formatAIResponse(reply);
+    if(data.error) {
+      thinkingEl.innerHTML = `<span style="color:var(--red)">API错误 (${res.status}): ${data.error.message||JSON.stringify(data.error)}</span>`;
+    } else {
+      const reply = data.content?.map(c=>c.text||'').join('') || '分析失败，请重试';
+      thinkingEl.innerHTML = formatAIResponse(reply);
+    }
   } catch(e) {
     thinkingEl.innerHTML = '<span style="color:var(--red)">连接失败，请稍后重试</span>';
   }
