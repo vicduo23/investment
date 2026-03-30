@@ -36,10 +36,17 @@ exports.handler = async (event) => {
     let data;
     const isNonUS = symbol.includes('.');
 
+    // Normalize HK codes: 700.HK -> 0700.HK (Yahoo needs 4-digit prefix)
+    let yahooSymbol = symbol;
+    if (symbol.endsWith('.HK')) {
+      const code = symbol.replace('.HK', '');
+      yahooSymbol = code.padStart(4, '0') + '.HK';
+    }
+
     if (type === 'quote') {
       if (isNonUS) {
         // Yahoo Finance for HK/JP/CN stocks
-        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1d`;
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?interval=1d&range=1d`;
         const raw = await fetchUrl(url);
         const meta = raw?.chart?.result?.[0]?.meta;
         if (!meta) throw new Error('No data from Yahoo');
