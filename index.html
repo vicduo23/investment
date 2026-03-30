@@ -454,9 +454,24 @@ function renderWatchlist(){
 
 async function loadWatchlistPrices(){
   for(const w of watchlist){
+    const isNonUS=w.ticker.includes('.');
     try{
-      const d=await fetch(`${FH}/quote?symbol=${w.ticker}&token=${FINNHUB_KEY}`).then(r=>r.json());
-      if(d.c){w.price=d.c;w.change=d.d||0;w.changePct=d.dp||0;}
+      if(!isNonUS){
+        const d=await fetch(`${FH}/quote?symbol=${w.ticker}&token=${FINNHUB_KEY}`).then(r=>r.json());
+        if(d.c){w.price=d.c;w.change=d.d||0;w.changePct=d.dp||0;}
+      } else {
+        const url=`https://query1.finance.yahoo.com/v8/finance/chart/${w.ticker}?interval=1d&range=1d`;
+        const proxy=`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+        const json=await fetch(proxy).then(r=>r.json());
+        const meta=JSON.parse(json.contents)?.chart?.result?.[0]?.meta;
+        if(meta?.regularMarketPrice){
+          const prev=meta.chartPreviousClose||meta.previousClose||meta.regularMarketPrice;
+          w.price=meta.regularMarketPrice;
+          w.change=w.price-prev;
+          w.changePct=prev?(w.change/prev*100):0;
+          if(!w.name||w.name===w.ticker)w.name=meta.shortName||meta.longName||w.ticker;
+        }
+      }
     }catch(e){}
   }
   localStorage.setItem('alpha_wl2',JSON.stringify(watchlist));
@@ -473,71 +488,89 @@ async function selectTicker(ticker){
   document.getElementById('d-name').textContent='加载中...';
   document.getElementById('d-price').textContent='--';
   switchMainTab('overview');
+  const isNonUS = ticker.includes('.');
   try{
-    const [qt,pf,ns,fi,rc]=await Promise.all([
-      fetch(`${FH}/quote?symbol=${ticker}&token=${FINNHUB_KEY}`).then(r=>r.json()),
-      fetch(`${FH}/stock/profile2?symbol=${ticker}&token=${FINNHUB_KEY}`).then(r=>r.json()),
-      fetch(`${FH}/company-news?symbol=${ticker}&from=${dAgo(7)}&to=${td()}&token=${FINNHUB_KEY}`).then(r=>r.json()),
-      fetch(`${FH}/stock/metric?symbol=${ticker}&metric=all&token=${FINNHUB_KEY}`).then(r=>r.json()),
-      fetch(`${FH}/stock/recommendation?symbol=${ticker}&token=${FINNHUB_KEY}`).then(r=>r.json()),
-    ]);
-    const p=qt.c||0,chg=qt.d||0,cp=qt.dp||0,isUp=cp>=0;
-    const m=fi?.metric||{};
-    const news=(Array.isArray(ns)?ns:[]).slice(0,8).map(n=>({src:n.source,hl:n.headline,sent:n.sentiment>0.05?'pos':n.sentiment<-0.05?'neg':'neu'}));
-    const lr=(Array.isArray(rc)?rc:[])[0]||{};
-    const buyN=(lr.strongBuy||0)+(lr.buy||0),holdN=lr.hold||0,sellN=(lr.sell||0)+(lr.strongSell||0);
-    selData={ticker,profile:pf,price:p,chg,chgPct:cp,quote:qt,m,news,buyN,holdN,sellN};
-    const cur=pf.currency==='HKD'?'HK$':pf.currency==='JPY'?'¥':'$';
-    set('d-ticker',ticker);set('d-name',pf.name||ticker);
-    set('d-price',cur+p.toFixed(2));
-    const ce=document.getElementById('d-chg');
-    ce.textContent=(isUp?'+':'')+chg.toFixed(2)+' ('+(isUp?'+':'')+cp.toFixed(2)+'%)';
-    ce.className='asset-chg '+(isUp?'up':'dn');
-    set('d-time','实时 · '+new Date().toLocaleTimeString('zh-CN',{hour12:false}));
-    document.getElementById('d-tags').innerHTML=[pf.finnhubIndustry,pf.exchange,pf.currency].filter(Boolean).map((t,i)=>`<span class="tag${i===0?' hi':''}">${t}</span>`).join('');
-    set('d-open',cur+(qt.o||0).toFixed(2));
-    set('d-high',cur+(qt.h||0).toFixed(2));
-    set('d-low',cur+(qt.l||0).toFixed(2));
-    set('d-vol',fmtN(m['10DayAverageTradingVolume']*1e6)||'--');
-    set('d-pe',m.peNormalizedAnnual?.toFixed(1)||m.peTTM?.toFixed(1)||'--');
-    set('d-pb',m.pbAnnual?.toFixed(1)||'--');
-    set('d-div',m.dividendYieldIndicatedAnnual!=null?m.dividendYieldIndicatedAnnual.toFixed(2)+'%':'--');
-    set('d-52w','$'+(m['52WeekLow']?.toFixed(0)||'--')+' / $'+(m['52WeekHigh']?.toFixed(0)||'--'));
-    const bars=[45,52,48,61,57,63,isUp?72:38];
-    const mx=Math.max(...bars);
-    document.getElementById('d-flow-bars').innerHTML=bars.map((b,i)=>`<div class="fb ${i===bars.length-1?(isUp?'fb-in':'fb-out'):(b>50?'fb-in':'fb-out')}" style="height:${Math.round(b/mx*100)}%"></div>`).join('');
-    const fn=document.getElementById('d-flow-net');
-    fn.textContent=isUp?'+流入偏多':'-流出偏多';
-    fn.className='trow-val '+(isUp?'up':'dn');
-    const newsHtml=arr=>arr.length?arr.map(n=>`<div class="news-item"><div class="news-src">${n.src||''}</div><div class="news-hl">${n.hl}</div><span class="news-sent ${n.sent==='pos'?'s-pos':n.sent==='neg'?'s-neg':'s-neu'}">${n.sent==='pos'?'📈 利多':n.sent==='neg'?'📉 利空':'📊 中性'}</span></div>`).join(''):'<div class="empty">暂无最新资讯</div>';
-    set('d-news-brief',newsHtml(news.slice(0,3)),'html');
-    set('d-news-full',newsHtml(news),'html');
-    const pct=v=>v!=null?(v>0?'+':'')+v.toFixed(1)+'%':'--';
-    set('f-gm',pct(m.grossMarginTTM));set('f-nm',pct(m.netProfitMarginTTM));
-    set('f-roe',pct(m.roeTTM));set('f-roa',pct(m.roaTTM));set('f-op',pct(m.operatingMarginTTM));
-    set('f-revg',pct(m.revenueGrowthTTMYoy));set('f-epsg',pct(m.epsGrowthTTMYoy));
-    set('f-fcf',m.freeCashFlowTTM?'$'+fmtN(m.freeCashFlowTTM*1e6):'--');
-    set('f-de',m.totalDebt_totalEquityAnnual?.toFixed(2)||'--');
-    set('f-cr',m.currentRatioAnnual?.toFixed(2)||'--');
-    set('f-ev',m.enterpriseValue_ebitdaTTM?.toFixed(1)+'x'||'--');
-    set('f-pfcf',m.priceToFreeCashFlowTTM?.toFixed(1)+'x'||'--');
-    set('f-mktcap',m.marketCapitalization?'$'+fmtN(m.marketCapitalization*1e6):'--');
-    const tot=buyN+holdN+sellN;
-    let sc='持有';if(tot>0){const br=buyN/tot;sc=br>0.65?'强烈买入':br>0.45?'买入':sellN/tot>0.4?'卖出':'持有';}
-    const se=document.getElementById('a-score');se.textContent=sc;se.className=sc.includes('买入')?'up':sc.includes('卖出')?'dn':'';
-    if(tot>0){const bp=Math.round(buyN/tot*100),hp=Math.round(holdN/tot*100),sp=100-bp-hp;set('a-bar',`<div class="rb-buy" style="flex:${bp}"></div><div class="rb-hold" style="flex:${hp}"></div><div class="rb-sell" style="flex:${sp}"></div>`,'html');}
-    set('a-buy','买入: '+buyN);set('a-hold','持有: '+holdN);set('a-sell','卖出: '+sellN);
-    const te=tot>0?p*(1+(buyN-sellN)/tot*0.12):p;
-    set('a-target',tot>0?cur+te.toFixed(0):'--');
-    const up=tot>0?((te-p)/p*100).toFixed(1):'--';
-    const upe=document.getElementById('a-upside');
-    upe.textContent=tot>0?(up>0?'+':'')+up+'%':'--';
-    upe.className='trow-val '+(up>0?'up':'dn');
-    const wi=watchlist.find(w=>w.ticker===ticker);
-    if(wi){wi.price=p;wi.change=chg;wi.changePct=cp;wi.name=pf.name||ticker;}
+    if(!isNonUS){
+      // US stocks via Finnhub
+      const [qt,pf,ns,fi,rc]=await Promise.all([
+        fetch(`${FH}/quote?symbol=${ticker}&token=${FINNHUB_KEY}`).then(r=>r.json()),
+        fetch(`${FH}/stock/profile2?symbol=${ticker}&token=${FINNHUB_KEY}`).then(r=>r.json()),
+        fetch(`${FH}/company-news?symbol=${ticker}&from=${dAgo(7)}&to=${td()}&token=${FINNHUB_KEY}`).then(r=>r.json()),
+        fetch(`${FH}/stock/metric?symbol=${ticker}&metric=all&token=${FINNHUB_KEY}`).then(r=>r.json()),
+        fetch(`${FH}/stock/recommendation?symbol=${ticker}&token=${FINNHUB_KEY}`).then(r=>r.json()),
+      ]);
+      const p=qt.c||0,chg=qt.d||0,cp=qt.dp||0,isUp=cp>=0;
+      const m=fi?.metric||{};
+      const news=(Array.isArray(ns)?ns:[]).slice(0,8).map(n=>({src:n.source,hl:n.headline,sent:n.sentiment>0.05?'pos':n.sentiment<-0.05?'neg':'neu'}));
+      const lr=(Array.isArray(rc)?rc:[])[0]||{};
+      const buyN=(lr.strongBuy||0)+(lr.buy||0),holdN=lr.hold||0,sellN=(lr.sell||0)+(lr.strongSell||0);
+      selData={ticker,profile:pf,price:p,chg,chgPct:cp,m,news,buyN,holdN,sellN};
+      renderStockUI(ticker,pf.name||ticker,p,chg,cp,qt,m,news,buyN,holdN,sellN,'$',pf);
+      const wi=watchlist.find(w=>w.ticker===ticker);
+      if(wi){wi.price=p;wi.change=chg;wi.changePct=cp;wi.name=pf.name||ticker;}
+    } else {
+      // HK/JP/CN via Yahoo Finance proxy
+      const url=`https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=1d`;
+      const proxy=`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+      const json=await fetch(proxy).then(r=>r.json());
+      const meta=JSON.parse(json.contents)?.chart?.result?.[0]?.meta;
+      if(!meta?.regularMarketPrice) throw new Error('无法获取数据，请检查股票代码格式');
+      const p=meta.regularMarketPrice;
+      const prev=meta.chartPreviousClose||meta.previousClose||p;
+      const chg=p-prev, cp=prev?(chg/prev*100):0;
+      const cur=meta.currency==='HKD'?'HK$':meta.currency==='JPY'?'¥':meta.currency==='CNY'?'¥':'$';
+      const name=meta.longName||meta.shortName||ticker;
+      const qt={o:meta.regularMarketOpen,h:meta.regularMarketDayHigh,l:meta.regularMarketDayLow,c:p};
+      const m={peNormalizedAnnual:meta.trailingPE||null,'52WeekHigh':meta.fiftyTwoWeekHigh,'52WeekLow':meta.fiftyTwoWeekLow,dividendYieldIndicatedAnnual:meta.dividendYield?meta.dividendYield*100:null};
+      const pf={name,currency:meta.currency,exchange:meta.exchangeName,finnhubIndustry:meta.quoteType||''};
+      selData={ticker,profile:pf,price:p,chg,chgPct:cp,m,news:[],buyN:0,holdN:0,sellN:0};
+      renderStockUI(ticker,name,p,chg,cp,qt,m,[],0,0,0,cur,pf);
+      const wi=watchlist.find(w=>w.ticker===ticker);
+      if(wi){wi.price=p;wi.change=chg;wi.changePct=cp;wi.name=name;}
+    }
     localStorage.setItem('alpha_wl2',JSON.stringify(watchlist));
     renderWatchlist();
   }catch(e){set('d-name','加载失败: '+e.message);}
+}
+
+function renderStockUI(ticker,name,p,chg,cp,qt,m,news,buyN,holdN,sellN,cur,pf){
+  const isUp=cp>=0;
+  const dp=cur==='¥'?0:2;
+  set('d-ticker',ticker);set('d-name',name);
+  set('d-price',cur+p.toFixed(dp));
+  const ce=document.getElementById('d-chg');
+  ce.textContent=(isUp?'+':'')+chg.toFixed(dp)+' ('+(isUp?'+':'')+cp.toFixed(2)+'%)';
+  ce.className='asset-chg '+(isUp?'up':'dn');
+  set('d-time','实时 · '+new Date().toLocaleTimeString('zh-CN',{hour12:false}));
+  document.getElementById('d-tags').innerHTML=[pf?.finnhubIndustry,pf?.exchange,pf?.currency].filter(Boolean).map((t,i)=>`<span class="tag${i===0?' hi':''}">${t}</span>`).join('');
+  set('d-open',cur+(qt.o||0).toFixed(dp));set('d-high',cur+(qt.h||0).toFixed(dp));set('d-low',cur+(qt.l||0).toFixed(dp));
+  set('d-vol',fmtN(m['10DayAverageTradingVolume']?m['10DayAverageTradingVolume']*1e6:0)||'--');
+  set('d-pe',m.peNormalizedAnnual?.toFixed(1)||m.peTTM?.toFixed(1)||'--');
+  set('d-pb',m.pbAnnual?.toFixed(1)||'--');
+  set('d-div',m.dividendYieldIndicatedAnnual!=null?m.dividendYieldIndicatedAnnual.toFixed(2)+'%':'--');
+  set('d-52w',cur+(m['52WeekLow']?.toFixed(0)||'--')+' / '+cur+(m['52WeekHigh']?.toFixed(0)||'--'));
+  const bars=[45,52,48,61,57,63,isUp?72:38],mx=Math.max(...bars);
+  document.getElementById('d-flow-bars').innerHTML=bars.map((b,i)=>`<div class="fb ${i===bars.length-1?(isUp?'fb-in':'fb-out'):(b>50?'fb-in':'fb-out')}" style="height:${Math.round(b/mx*100)}%"></div>`).join('');
+  const fn=document.getElementById('d-flow-net');fn.textContent=isUp?'+流入偏多':'-流出偏多';fn.className='trow-val '+(isUp?'up':'dn');
+  const newsHtml=arr=>arr.length?arr.map(n=>`<div class="news-item"><div class="news-src">${n.src||''}</div><div class="news-hl">${n.hl}</div><span class="news-sent ${n.sent==='pos'?'s-pos':n.sent==='neg'?'s-neg':'s-neu'}">${n.sent==='pos'?'📈 利多':n.sent==='neg'?'📉 利空':'📊 中性'}</span></div>`).join(''):'<div class="empty">暂无最新资讯</div>';
+  set('d-news-brief',newsHtml(news.slice(0,3)),'html');set('d-news-full',newsHtml(news),'html');
+  const pct=v=>v!=null?(v>0?'+':'')+v.toFixed(1)+'%':'--';
+  set('f-gm',pct(m.grossMarginTTM));set('f-nm',pct(m.netProfitMarginTTM));
+  set('f-roe',pct(m.roeTTM));set('f-roa',pct(m.roaTTM));set('f-op',pct(m.operatingMarginTTM));
+  set('f-revg',pct(m.revenueGrowthTTMYoy));set('f-epsg',pct(m.epsGrowthTTMYoy));
+  set('f-fcf',m.freeCashFlowTTM?cur+fmtN(m.freeCashFlowTTM*1e6):'--');
+  set('f-de',m.totalDebt_totalEquityAnnual?.toFixed(2)||'--');set('f-cr',m.currentRatioAnnual?.toFixed(2)||'--');
+  set('f-ev',m.enterpriseValue_ebitdaTTM?.toFixed(1)+'x'||'--');set('f-pfcf',m.priceToFreeCashFlowTTM?.toFixed(1)+'x'||'--');
+  set('f-mktcap',m.marketCapitalization?cur+fmtN(m.marketCapitalization*1e6):'--');
+  const tot=buyN+holdN+sellN;
+  let sc='--';if(tot>0){const br=buyN/tot;sc=br>0.65?'强烈买入':br>0.45?'买入':sellN/tot>0.4?'卖出':'持有';}
+  const se=document.getElementById('a-score');se.textContent=sc;se.className=sc.includes('买入')?'up':sc.includes('卖出')?'dn':'';
+  if(tot>0){const bp=Math.round(buyN/tot*100),hp=Math.round(holdN/tot*100),sp=100-bp-hp;set('a-bar',`<div class="rb-buy" style="flex:${bp}"></div><div class="rb-hold" style="flex:${hp}"></div><div class="rb-sell" style="flex:${sp}"></div>`,'html');}
+  set('a-buy','买入: '+buyN);set('a-hold','持有: '+holdN);set('a-sell','卖出: '+sellN);
+  const te=tot>0?p*(1+(buyN-sellN)/tot*0.12):p;
+  set('a-target',tot>0?cur+te.toFixed(0):'--');
+  const up=tot>0?((te-p)/p*100).toFixed(1):'--';
+  const upe=document.getElementById('a-upside');upe.textContent=tot>0?(parseFloat(up)>0?'+':'')+up+'%':'--';upe.className='trow-val '+(parseFloat(up)>0?'up':'dn');
 }
 
 function addPortRow(t='',q='',c=''){
