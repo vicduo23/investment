@@ -381,8 +381,8 @@ header{display:flex;align-items:center;justify-content:space-between;padding:0 2
 </div>
 
 <script>
-const FINNHUB_KEY='d74uff1r01qg1eo6u5l0d74uff1r01qg1eo6u5lg';
-const FH='https://finnhub.io/api/v1';
+const API = '/.netlify/functions/proxy';
+function fhq(type, symbol) { return fetch(`${API}?type=${type}&symbol=${encodeURIComponent(symbol)}`).then(r=>r.json()); }
 function getClaudeKey(){return localStorage.getItem('alpha_ck')||'';}
 function getGeminiKey(){return localStorage.getItem('alpha_gk')||'';}
 
@@ -414,31 +414,25 @@ async function callAI(prompt,sys='你是专业投资分析师，用简洁专业�
 }
 
 async function loadIndices(){
-  // US, HK, JP via Finnhub
-  for(const [id,sym] of [['us','^GSPC'],['hk','^HSI'],['jp','^N225']]){
+  for(const [id,sym,label] of [['us','SPX',''],['hk','HSI',''],['jp','N225',''],['cn','CN_INDEX','']]) {
     try{
-      const d=await fetch(`${FH}/quote?symbol=${sym}&token=${FINNHUB_KEY}`).then(r=>r.json());
-      if(d.c){
-        document.getElementById(id+'-val').textContent=d.c.toLocaleString('en',{maximumFractionDigits:0});
-        const el=document.getElementById(id+'-chg');
-        el.textContent=(d.dp>=0?'+':'')+d.dp.toFixed(2)+'%';
-        el.className='mkt-chg '+(d.dp>=0?'up-bg':'dn-bg');
+      if(id==='cn'){
+        const d=await fhq('cn_index','CN');
+        document.getElementById('cn-val').textContent=d.price;
+        const el=document.getElementById('cn-chg');
+        el.textContent=(parseFloat(d.chgPct)>=0?'+':'')+d.chgPct+'%';
+        el.className='mkt-chg '+(parseFloat(d.chgPct)>=0?'up-bg':'dn-bg');
+      } else {
+        const d=await fhq('index',sym);
+        if(d.c){
+          document.getElementById(id+'-val').textContent=d.c.toLocaleString('en',{maximumFractionDigits:0});
+          const el=document.getElementById(id+'-chg');
+          el.textContent=(d.dp>=0?'+':'')+d.dp.toFixed(2)+'%';
+          el.className='mkt-chg '+(d.dp>=0?'up-bg':'dn-bg');
+        }
       }
     }catch(e){}
   }
-  // A股 via East Money proxy
-  try{
-    const proxy='https://api.allorigins.win/get?url='+encodeURIComponent('https://push2.eastmoney.com/api/qt/stock/get?secid=1.000001&fields=f43,f169,f170');
-    const j=await fetch(proxy).then(r=>r.json());
-    const d=JSON.parse(j.contents)?.data;
-    if(d){
-      document.getElementById('cn-val').textContent=(d.f43/100).toFixed(2);
-      const chgPct=(d.f170/100);
-      const el=document.getElementById('cn-chg');
-      el.textContent=(chgPct>=0?'+':'')+chgPct.toFixed(2)+'%';
-      el.className='mkt-chg '+(chgPct>=0?'up-bg':'dn-bg');
-    }
-  }catch(e){}
 }
 
 function renderWatchlist(){
@@ -454,24 +448,9 @@ function renderWatchlist(){
 
 async function loadWatchlistPrices(){
   for(const w of watchlist){
-    const isNonUS=w.ticker.includes('.');
     try{
-      if(!isNonUS){
-        const d=await fetch(`${FH}/quote?symbol=${w.ticker}&token=${FINNHUB_KEY}`).then(r=>r.json());
-        if(d.c){w.price=d.c;w.change=d.d||0;w.changePct=d.dp||0;}
-      } else {
-        const url=`https://query1.finance.yahoo.com/v8/finance/chart/${w.ticker}?interval=1d&range=1d`;
-        const proxy=`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
-        const json=await fetch(proxy).then(r=>r.json());
-        const meta=JSON.parse(json.contents)?.chart?.result?.[0]?.meta;
-        if(meta?.regularMarketPrice){
-          const prev=meta.chartPreviousClose||meta.previousClose||meta.regularMarketPrice;
-          w.price=meta.regularMarketPrice;
-          w.change=w.price-prev;
-          w.changePct=prev?(w.change/prev*100):0;
-          if(!w.name||w.name===w.ticker)w.name=meta.shortName||meta.longName||w.ticker;
-        }
-      }
+      const d=await fhq('quote', w.ticker);
+      if(d.c){w.price=d.c;w.change=d.d||0;w.changePct=d.dp||0;if(d.name)w.name=d.name;}
     }catch(e){}
   }
   localStorage.setItem('alpha_wl2',JSON.stringify(watchlist));
@@ -493,11 +472,8 @@ async function selectTicker(ticker){
     if(!isNonUS){
       // US stocks via Finnhub
       const [qt,pf,ns,fi,rc]=await Promise.all([
-        fetch(`${FH}/quote?symbol=${ticker}&token=${FINNHUB_KEY}`).then(r=>r.json()),
-        fetch(`${FH}/stock/profile2?symbol=${ticker}&token=${FINNHUB_KEY}`).then(r=>r.json()),
-        fetch(`${FH}/company-news?symbol=${ticker}&from=${dAgo(7)}&to=${td()}&token=${FINNHUB_KEY}`).then(r=>r.json()),
-        fetch(`${FH}/stock/metric?symbol=${ticker}&metric=all&token=${FINNHUB_KEY}`).then(r=>r.json()),
-        fetch(`${FH}/stock/recommendation?symbol=${ticker}&token=${FINNHUB_KEY}`).then(r=>r.json()),
+        fhq('quote',ticker), fhq('profile',ticker),
+        fhq('news',ticker), fhq('metric',ticker), fhq('recommend',ticker),
       ]);
       const p=qt.c||0,chg=qt.d||0,cp=qt.dp||0,isUp=cp>=0;
       const m=fi?.metric||{};
@@ -510,19 +486,14 @@ async function selectTicker(ticker){
       if(wi){wi.price=p;wi.change=chg;wi.changePct=cp;wi.name=pf.name||ticker;}
     } else {
       // HK/JP/CN via Yahoo Finance proxy
-      const url=`https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=1d`;
-      const proxy=`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
-      const json=await fetch(proxy).then(r=>r.json());
-      const meta=JSON.parse(json.contents)?.chart?.result?.[0]?.meta;
-      if(!meta?.regularMarketPrice) throw new Error('无法获取数据，请检查股票代码格式');
-      const p=meta.regularMarketPrice;
-      const prev=meta.chartPreviousClose||meta.previousClose||p;
-      const chg=p-prev, cp=prev?(chg/prev*100):0;
-      const cur=meta.currency==='HKD'?'HK$':meta.currency==='JPY'?'¥':meta.currency==='CNY'?'¥':'$';
-      const name=meta.longName||meta.shortName||ticker;
-      const qt={o:meta.regularMarketOpen,h:meta.regularMarketDayHigh,l:meta.regularMarketDayLow,c:p};
-      const m={peNormalizedAnnual:meta.trailingPE||null,'52WeekHigh':meta.fiftyTwoWeekHigh,'52WeekLow':meta.fiftyTwoWeekLow,dividendYieldIndicatedAnnual:meta.dividendYield?meta.dividendYield*100:null};
-      const pf={name,currency:meta.currency,exchange:meta.exchangeName,finnhubIndustry:meta.quoteType||''};
+      const d=await fhq('quote',ticker);
+      if(!d.c) throw new Error('无法获取数据，请检查股票代码格式');
+      const p=d.c, chg=d.d||0, cp=d.dp||0;
+      const cur=d.currency==='HKD'?'HK$':d.currency==='JPY'?'¥':d.currency==='CNY'?'¥':'$';
+      const name=d.name||ticker;
+      const qt={o:d.o,h:d.h,l:d.l,c:p};
+      const m={peNormalizedAnnual:d.pe||null,'52WeekHigh':d.high52,'52WeekLow':d.low52};
+      const pf={name,currency:d.currency,exchange:d.exchange,finnhubIndustry:''};
       selData={ticker,profile:pf,price:p,chg,chgPct:cp,m,news:[],buyN:0,holdN:0,sellN:0};
       renderStockUI(ticker,name,p,chg,cp,qt,m,[],0,0,0,cur,pf);
       const wi=watchlist.find(w=>w.ticker===ticker);
@@ -593,7 +564,7 @@ async function analyzePortfolio(){
   document.getElementById('portResult').innerHTML='<div class="empty">AI 正在分析你的持仓组合...</div>';
   for(const h of holdings){
     try{
-      const d=await fetch(`${FH}/quote?symbol=${h.ticker}&token=${FINNHUB_KEY}`).then(r=>r.json());
+      const d=await fhq('quote', h.ticker);
       h.cur=d.c||h.cost;h.pnl=((h.cur-h.cost)/h.cost*100).toFixed(1);h.val=(h.cur*h.qty).toFixed(0);
     }catch(e){h.cur=h.cost;h.pnl='0';h.val=(h.cost*h.qty).toFixed(0);}
   }
